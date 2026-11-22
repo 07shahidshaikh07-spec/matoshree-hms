@@ -1,0 +1,50 @@
+{
+  "name": "matoshree-clinic-emr",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Simple, Modern, and Reliable Electronic Medical Records (EMR) System for Matoshree Clinic, Latur, Maharashtra (Dr. Vinod Korale & Dr. Vaishali Korale)",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "prisma generate && next build",
+    "render:build": "node scripts/prepare-deploy.mjs && prisma generate && prisma db push --accept-data-loss && prisma db seed && next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:neon": "node scripts/prepare-deploy.mjs postgresql && prisma generate",
+    "db:sqlite": "node scripts/prepare-deploy.mjs sqlite && prisma generate",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:clean": "node scripts/clear-demo-data.mjs",
+    "db:reset": "prisma migrate reset --force",
+    "test": "node tests/run-tests.mjs",
+    "verify:standalone": "node scripts/standalone-server.mjs --verify"
+  },
+  "dependencies": {
+    "next": "14.2.15",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "@prisma/client": "5.20.0",
+    "zod": "3.23.8",
+    "lucide-react": "0.446.0",
+    "clsx": "2.1.1",
+    "tailwind-merge": "2.5.2"
+  },
+  "devDependencies": {
+    "typescript": "5.6.2",
+    "@types/node": "20.16.10",
+    "@types/react": "18.3.10",
+    "@types/react-dom": "18.3.0",
+    "prisma": "5.20.0",
+    "tsx": "4.19.1",
+    "tailwindcss": "3.4.13",
+    "postcss": "8.4.47",
+    "autoprefixer": "10.4.20",
+    "eslint": "8.57.1",
+    "eslint-config-next": "14.2.15"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}

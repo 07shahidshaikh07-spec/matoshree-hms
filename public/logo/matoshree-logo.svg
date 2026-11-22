@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+  <defs>
+    <linearGradient id="tealGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#258B7C" />
+      <stop offset="100%" stop-color="#1C6B5F" />
+    </linearGradient>
+  </defs>
+  <rect width="160" height="160" rx="36" fill="url(#tealGrad)" />
+  <circle cx="80" cy="80" r="62" fill="none" stroke="#70CFBA" stroke-width="3" opacity="0.4" />
+  <!-- Medical Cross with Gentle Leaf Accent -->
+  <path d="M72 44 H88 V72 H116 V88 H88 V116 H72 V88 H44 V72 H72 Z" fill="#FFFFFF" />
+  <circle cx="80" cy="80" r="6" fill="#70CFBA" />
+  <path d="M102 54 C112 50 118 58 116 68 C106 68 100 62 102 54 Z" fill="#70CFBA" />
+</svg>

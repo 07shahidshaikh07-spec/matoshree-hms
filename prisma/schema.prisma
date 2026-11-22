@@ -1,0 +1,314 @@
+// ============================================================================
+// MATOSHREE CLINIC EMR — DATABASE SCHEMA
+// Clinic: Matoshree Clinic | Latur, Maharashtra, India
+// Doctors: Dr. Vinod Korale & Dr. Vaishali Korale
+// Database: SQLite (Zero-config, fast, reliable, portable)
+// Timezone: Asia/Kolkata (IST)
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+// 1. USERS, ROLES, CLINIC SETTINGS & AUDIT LOGS
+// ----------------------------------------------------------------------------
+
+model User {
+  id                String      @id @default(uuid())
+  employeeCode      String      @unique
+  fullName          String
+  email             String      @unique
+  mobileNumber      String
+  passwordHash      String
+  role              String      // "DOCTOR" | "RECEPTIONIST" | "ADMINISTRATOR"
+  isActive          Boolean     @default(true)
+  lastLoginAt       DateTime?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  doctorProfile     DoctorProfile?
+  sessions          Session[]
+  auditLogs         AuditLog[]
+  recordedVitals    VitalObservation[]
+  recordedPayments  Payment[]
+
+  @@index([role, isActive])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  tokenHash    String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model ClinicSetting {
+  id                    String   @id @default("default")
+  clinicName            String   @default("Matoshree Clinic")
+  location              String   @default("Latur, Maharashtra, India")
+  addressLine           String   @default("Latur, Maharashtra")
+  contactPhone          String   @default("+91-2382-000000")
+  email                 String   @default("contact@matoshreeclinic.in")
+  website               String?
+  logoUrl               String?
+  timezone              String   @default("Asia/Kolkata")
+  taxEnabled            Boolean  @default(false)
+  taxPercentage         Float    @default(0.0)
+  updatedAt             DateTime @updatedAt
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  actorUserId  String?
+  actorRole    String?
+  action       String   // "PATIENT_CREATE", "OPD_VISIT_CREATE", "CONSULTATION_FINALIZE", "PAYMENT_RECORD"
+  entityType   String   // "Patient", "OPDVisit", "Consultation", "Bill", "Payment"
+  entityId     String
+  summary      String
+  createdAt    DateTime @default(now())
+
+  actor        User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([actorUserId, createdAt])
+}
+
+// ----------------------------------------------------------------------------
+// 2. DOCTOR PROFILES
+// ----------------------------------------------------------------------------
+
+model DoctorProfile {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  doctorName         String
+  qualification      String   @default("MBBS")
+  registrationNumber String   @default("")
+  specialty          String   @default("General Practitioner")
+  consultationFee    Float    @default(300.0)
+  followupFee        Float    @default(200.0)
+  roomNumber         String?
+  isAvailable        Boolean  @default(true)
+
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  opdVisits          OPDVisit[]
+  appointments       Appointment[]
+  consultations      Consultation[]
+  bills              Bill[]
+}
+
+// ----------------------------------------------------------------------------
+// 3. PATIENTS (LIGHTWEIGHT & PRACTICAL)
+// ----------------------------------------------------------------------------
+
+model Patient {
+  id                  String   @id @default(uuid())
+  patientId           String   @unique // e.g. MC-2026-0001
+  fullName            String
+  age                 Int
+  gender              String   // "Male" | "Female" | "Other"
+  mobileNumber        String
+  address             String?
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  opdVisits           OPDVisit[]
+  appointments        Appointment[]
+  consultations       Consultation[]
+  bills               Bill[]
+
+  @@index([fullName])
+  @@index([mobileNumber])
+  @@index([createdAt])
+}
+
+// ----------------------------------------------------------------------------
+// 4. OPD VISITS & QUEUE
+// ----------------------------------------------------------------------------
+
+model OPDVisit {
+  id               String        @id @default(uuid())
+  visitNumber      String        @unique // e.g. OPD-2026-0001
+  patientId        String
+  doctorId         String
+  visitDate        DateTime      @default(now())
+  visitTime        String        // e.g. "10:30 AM"
+  tokenNumber      Int           // Sequential daily token
+  reasonForVisit   String?
+  status           String        @default("WAITING") // "WAITING" | "IN_CONSULTATION" | "COMPLETED" | "CANCELLED"
+  appointmentId    String?       @unique
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  patient          Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  doctor           DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  appointment      Appointment?  @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  consultation     Consultation?
+  bill             Bill?
+
+  @@unique([doctorId, visitDate, tokenNumber])
+  @@index([visitDate, status])
+  @@index([patientId])
+}
+
+// ----------------------------------------------------------------------------
+// 5. APPOINTMENTS
+// ----------------------------------------------------------------------------
+
+model Appointment {
+  id                String        @id @default(uuid())
+  appointmentNumber String        @unique // e.g. APT-2026-0001
+  patientId         String
+  doctorId          String
+  appointmentDate   DateTime
+  slotTime          String        // e.g. "11:00 AM"
+  reasonForVisit    String?
+  status            String        @default("SCHEDULED") // "SCHEDULED" | "CONFIRMED" | "COMPLETED" | "CANCELLED" | "NO_SHOW"
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  patient           Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  doctor            DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  opdVisit          OPDVisit?
+
+  @@unique([doctorId, appointmentDate, slotTime])
+  @@index([appointmentDate, status])
+  @@index([patientId])
+}
+
+// ----------------------------------------------------------------------------
+// 6. DOCTOR CONSULTATIONS, VITALS & PRESCRIPTIONS
+// ----------------------------------------------------------------------------
+
+model Consultation {
+  id                    String        @id @default(uuid())
+  opdVisitId            String        @unique
+  patientId             String
+  doctorId              String
+  consultationDate      DateTime      @default(now())
+  chiefComplaint        String
+  historyOfPresentIllness String?
+  examinationFindings   String?
+  diagnosis             String
+  adviceInstructions    String?
+  followUpDate          DateTime?
+  status                String        @default("FINALIZED") // "DRAFT" | "FINALIZED"
+  signedAt              DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  opdVisit              OPDVisit      @relation(fields: [opdVisitId], references: [id], onDelete: Cascade)
+  patient               Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  doctor                DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Restrict)
+  vitals                VitalObservation?
+  prescriptions         Prescription[]
+
+  @@index([patientId, consultationDate])
+  @@index([doctorId])
+}
+
+model VitalObservation {
+  id               String       @id @default(uuid())
+  consultationId   String       @unique
+  recordedById     String?
+  bloodPressureSys Int?
+  bloodPressureDia Int?
+  pulseRateBpm     Int?
+  temperatureF     Float?
+  spo2Percent      Int?
+  weightKg         Float?
+  heightCm         Float?
+  recordedAt       DateTime     @default(now())
+
+  consultation     Consultation @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  recordedBy       User?        @relation(fields: [recordedById], references: [id], onDelete: SetNull)
+}
+
+model Prescription {
+  id                  String                 @id @default(uuid())
+  prescriptionNumber  String                 @unique // e.g. RX-2026-0001
+  consultationId      String
+  advice              String?
+  followUpDate        DateTime?
+  isFinalized         Boolean                @default(true)
+  finalizedAt         DateTime?
+  createdAt           DateTime               @default(now())
+
+  consultation        Consultation           @relation(fields: [consultationId], references: [id], onDelete: Cascade)
+  items               PrescriptionMedicine[]
+}
+
+model PrescriptionMedicine {
+  id              String       @id @default(uuid())
+  prescriptionId  String
+  medicineName    String
+  strength        String?      // e.g. "500mg", "650mg"
+  dosage          String       // e.g. "1 Tablet", "1 Spoon"
+  frequency       String       // e.g. "1-0-1 (After Meals)"
+  duration        String       // e.g. "5 Days"
+  instructions    String?      // e.g. "Take after food with warm water"
+
+  prescription    Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+}
+
+// ----------------------------------------------------------------------------
+// 7. BILLING, PAYMENTS & RECEIPTS
+// ----------------------------------------------------------------------------
+
+model Bill {
+  id                     String        @id @default(uuid())
+  billNumber             String        @unique // e.g. BILL-2026-0001
+  patientId              String
+  opdVisitId             String?       @unique
+  doctorId               String?
+  consultationCharges    Float         @default(0.0)
+  additionalCharges      Float         @default(0.0)
+  additionalChargesNotes String?
+  discountAmount         Float         @default(0.0)
+  discountReason         String?
+  totalAmount            Float         @default(0.0)
+  paidAmount             Float         @default(0.0)
+  balanceDue             Float         @default(0.0)
+  paymentStatus          String        @default("PENDING") // "PAID" | "PARTIALLY_PAID" | "PENDING"
+  notes                  String?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  patient                Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  opdVisit               OPDVisit?     @relation(fields: [opdVisitId], references: [id], onDelete: SetNull)
+  doctor                 DoctorProfile? @relation(fields: [doctorId], references: [id], onDelete: SetNull)
+  payments               Payment[]
+
+  @@index([patientId, createdAt])
+  @@index([paymentStatus])
+}
+
+model Payment {
+  id              String   @id @default(uuid())
+  receiptNumber   String   @unique // e.g. RCPT-2026-0001
+  billId          String
+  amount          Float
+  paymentMethod   String   // "CASH" | "UPI" | "OTHER"
+  transactionRef  String?
+  idempotencyKey  String   @unique
+  receivedById    String?
+  remarks         String?
+  receivedAt      DateTime @default(now())
+
+  bill            Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  receivedBy      User?    @relation(fields: [receivedById], references: [id], onDelete: SetNull)
+
+  @@index([billId])
+  @@index([receivedAt])
+}
