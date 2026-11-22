@@ -1,19 +1,19 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Sidebar, NavModule } from "@/components/Sidebar";
-import { DashboardView } from "@/components/DashboardView";
-import { PatientsView } from "@/components/PatientsView";
-import { OpdAppointmentsView } from "@/components/OpdAppointmentsView";
-import { ConsultationWorkspace } from "@/components/ConsultationWorkspace";
-import { BillingView } from "@/components/BillingView";
-import { ReportsView } from "@/components/ReportsView";
-import { SettingsView } from "@/components/SettingsView";
-import { LoginModal } from "@/components/LoginModal";
+import { Sidebar, NavModule } from "../components/Sidebar";
+import { DashboardView } from "../components/DashboardView";
+import { PatientsView } from "../components/PatientsView";
+import { OpdAppointmentsView } from "../components/OpdAppointmentsView";
+import { ConsultationWorkspace } from "../components/ConsultationWorkspace";
+import { BillingView } from "../components/BillingView";
+import { ReportsView } from "../components/ReportsView";
+import { SettingsView } from "../components/SettingsView";
+import { LoginModal } from "../components/LoginModal";
 import {
   PrintablePrescriptionModal,
   PrintableReceiptModal
-} from "@/components/PrintableDocuments";
+} from "../components/PrintableDocuments";
 import { UserCheck, Menu } from "lucide-react";
 
 export default function AppHome() {

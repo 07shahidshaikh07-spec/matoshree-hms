@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { formatISTDate } from "@/lib/timezone";
-import { PatientSelector } from "@/components/PatientSelector";
+import { PatientSelector } from "./PatientSelector";
 import {
   Calendar as CalendarIcon,
   PlusCircle,

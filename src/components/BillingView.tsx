@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { formatINR, formatISTDateTime, formatISTDate } from "@/lib/timezone";
-import { PatientSelector } from "@/components/PatientSelector";
+import { PatientSelector } from "./PatientSelector";
 import {
   Receipt,
   PlusCircle,
