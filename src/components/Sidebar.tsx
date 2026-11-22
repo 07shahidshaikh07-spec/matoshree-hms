@@ -161,12 +161,12 @@ export function Sidebar({
         >
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold text-white flex-shrink-0">
-              {currentUser.fullName.charAt(0)}
+              {currentUser?.fullName ? currentUser.fullName.charAt(0) : "U"}
             </div>
             <div className="truncate">
-              <p className="text-xs font-bold truncate text-white">{currentUser.fullName}</p>
+              <p className="text-xs font-bold truncate text-white">{currentUser?.fullName || "Staff User"}</p>
               <span className="inline-block px-2 py-0.5 bg-white/20 rounded text-[10px] font-bold tracking-wide uppercase text-white/95">
-                {currentUser.role === "RECEPTIONIST" ? "Reception Window" : "Doctor Window"}
+                {currentUser?.role === "RECEPTIONIST" ? "Reception Window" : "Doctor Window"}
               </span>
             </div>
           </div>

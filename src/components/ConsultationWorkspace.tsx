@@ -272,7 +272,14 @@ export function ConsultationWorkspace({
           setDiagnosis(c.diagnosis || "");
           setAdvice(c.adviceInstructions || "");
           if (c.followUpDate) {
-            setFollowUpDate(new Date(c.followUpDate).toISOString().split("T")[0]);
+            try {
+              const fd = new Date(c.followUpDate);
+              if (!isNaN(fd.getTime())) {
+                setFollowUpDate(fd.toISOString().split("T")[0]);
+              }
+            } catch (e) {
+              console.error("Invalid followUpDate:", e);
+            }
           }
           if (c.vitals) {
             setBpSys(c.vitals.bloodPressureSys ? String(c.vitals.bloodPressureSys) : "");

@@ -65,13 +65,13 @@ export function PatientsView({
   const [editingPatient, setEditingPatient] = useState<any | null>(null);
 
   // Filter patients by search query (Name, Mobile, Patient ID)
-  const filteredPatients = patients.filter((p) => {
+  const filteredPatients = (patients || []).filter((p) => {
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
     return (
-      p.fullName.toLowerCase().includes(q) ||
-      p.patientId.toLowerCase().includes(q) ||
-      p.mobileNumber.includes(q)
+      (p?.fullName || "").toLowerCase().includes(q) ||
+      (p?.patientId || "").toLowerCase().includes(q) ||
+      (p?.mobileNumber || "").includes(q)
     );
   });
 

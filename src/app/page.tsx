@@ -70,31 +70,35 @@ export default function AppHome() {
         }
       }
 
-      const resUsers = await fetch("/api/auth");
-      const jsonUsers = await resUsers.json();
-      if (jsonUsers.users && jsonUsers.users.length > 0) {
-        setAllUsers(jsonUsers.users);
-        if (savedUser && savedUser.id) {
-          const matched = jsonUsers.users.find((u: any) => u.id === savedUser.id);
-          if (matched) {
-            setCurrentUser(matched);
-          }
-        } else {
-          // Find Dr. Vinod Korale as initial user if not set
-          const docVinod = jsonUsers.users.find((u: any) => u.fullName.includes("Vinod"));
-          if (docVinod) {
-            setCurrentUser(docVinod);
+      const resUsers = await fetch("/api/auth").catch(() => null);
+      if (resUsers && resUsers.ok) {
+        const jsonUsers = await resUsers.json().catch(() => null);
+        if (jsonUsers?.users && jsonUsers.users.length > 0) {
+          setAllUsers(jsonUsers.users);
+          if (savedUser && savedUser.id) {
+            const matched = jsonUsers.users.find((u: any) => u.id === savedUser.id);
+            if (matched) {
+              setCurrentUser(matched);
+            }
           } else {
-            setCurrentUser(jsonUsers.users[0]);
+            // Find Dr. Vinod Korale as initial user if not set
+            const docVinod = jsonUsers.users.find((u: any) => u.fullName && u.fullName.includes("Vinod"));
+            if (docVinod) {
+              setCurrentUser(docVinod);
+            } else {
+              setCurrentUser(jsonUsers.users[0]);
+            }
           }
         }
       }
 
-      const resSettings = await fetch("/api/settings");
-      const jsonSettings = await resSettings.json();
-      if (jsonSettings.data) {
-        setClinicSetting(jsonSettings.data.clinicSetting);
-        setDoctors(jsonSettings.data.doctors || []);
+      const resSettings = await fetch("/api/settings").catch(() => null);
+      if (resSettings && resSettings.ok) {
+        const jsonSettings = await resSettings.json().catch(() => null);
+        if (jsonSettings?.data) {
+          setClinicSetting(jsonSettings.data.clinicSetting);
+          setDoctors(jsonSettings.data.doctors || []);
+        }
       }
     } catch (e) {
       console.error("Meta load error:", e);
@@ -106,26 +110,26 @@ export default function AppHome() {
     setLoading(true);
     try {
       const [dashRes, patRes, opdRes, apptRes, billRes] = await Promise.all([
-        fetch("/api/dashboard"),
-        fetch("/api/patients"),
-        fetch("/api/opd"),
-        fetch("/api/appointments"),
-        fetch("/api/billing")
+        fetch("/api/dashboard").catch(() => null),
+        fetch("/api/patients").catch(() => null),
+        fetch("/api/opd").catch(() => null),
+        fetch("/api/appointments").catch(() => null),
+        fetch("/api/billing").catch(() => null)
       ]);
 
       const [dashJson, patJson, opdJson, apptJson, billJson] = await Promise.all([
-        dashRes.json(),
-        patRes.json(),
-        opdRes.json(),
-        apptRes.json(),
-        billRes.json()
+        dashRes && dashRes.ok ? dashRes.json().catch(() => null) : null,
+        patRes && patRes.ok ? patRes.json().catch(() => null) : null,
+        opdRes && opdRes.ok ? opdRes.json().catch(() => null) : null,
+        apptRes && apptRes.ok ? apptRes.json().catch(() => null) : null,
+        billRes && billRes.ok ? billRes.json().catch(() => null) : null
       ]);
 
-      if (dashJson.data) setDashboardData(dashJson.data);
-      if (patJson.data) setPatients(patJson.data);
-      if (opdJson.data) setVisits(opdJson.data);
-      if (apptJson.data) setAppointments(apptJson.data);
-      if (billJson.data?.bills) setBills(billJson.data.bills);
+      if (dashJson?.data) setDashboardData(dashJson.data);
+      if (patJson?.data) setPatients(patJson.data);
+      if (opdJson?.data) setVisits(opdJson.data);
+      if (apptJson?.data) setAppointments(apptJson.data);
+      if (billJson?.data?.bills) setBills(billJson.data.bills);
     } catch (e) {
       console.error("Data refresh error:", e);
     } finally {

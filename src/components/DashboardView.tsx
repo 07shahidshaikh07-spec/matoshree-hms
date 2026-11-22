@@ -48,7 +48,7 @@ export function DashboardView({
   onConvertAppointment,
   currentUserRole
 }: DashboardViewProps) {
-  if (loading || !data) {
+  if (loading) {
     return (
       <div className="p-8 flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
@@ -59,7 +59,42 @@ export function DashboardView({
     );
   }
 
-  const { summaryCards, todayVisits, upcomingAppointments } = data;
+  if (!data) {
+    return (
+      <div className="p-8 flex items-center justify-center min-h-[60vh]">
+        <div className="flex flex-col items-center gap-3 text-center max-w-sm">
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold text-slate-900">Connecting to Clinic Database...</h3>
+          <p className="text-xs text-slate-500">
+            Database connection is waking up from idle state. Click below to refresh.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== "undefined") window.location.reload();
+            }}
+            className="px-4 py-2 bg-[#258B7C] hover:bg-[#1d6f63] text-white rounded-xl text-xs font-bold transition shadow-sm"
+          >
+            Refresh Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const summaryCards = data.summaryCards || {
+    todayPatientsCount: 0,
+    todayAppointmentsCount: 0,
+    pendingPaymentsAmount: 0,
+    todayCollectionTotal: 0,
+    cashCollection: 0,
+    upiCollection: 0,
+    otherCollection: 0
+  };
+  const todayVisits = data.todayVisits || [];
+  const upcomingAppointments = data.upcomingAppointments || [];
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-5 sm:space-y-6">

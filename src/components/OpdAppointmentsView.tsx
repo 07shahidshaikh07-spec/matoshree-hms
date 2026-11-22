@@ -94,6 +94,13 @@ export function OpdAppointmentsView({
   // Public Booking Portal Share Modal
   const [showSharePortalModal, setShowSharePortalModal] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [bookingUrl, setBookingUrl] = useState("/book");
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setBookingUrl(`${window.location.origin}/book`);
+    }
+  }, []);
 
   // --------------------------------------------------------------------------
   // FILTERS
@@ -143,8 +150,14 @@ export function OpdAppointmentsView({
     if (apptDoctorFilter !== "ALL" && a.doctorId !== apptDoctorFilter) return false;
     if (apptStatusFilter !== "ALL" && a.status !== apptStatusFilter) return false;
     if (apptDateFilter) {
-      const aDate = new Date(a.appointmentDate).toISOString().split("T")[0];
-      if (aDate !== apptDateFilter) return false;
+      try {
+        const d = a.appointmentDate ? new Date(a.appointmentDate) : null;
+        if (!d || isNaN(d.getTime())) return false;
+        const aDate = d.toISOString().split("T")[0];
+        if (aDate !== apptDateFilter) return false;
+      } catch {
+        return false;
+      }
     }
     return true;
   });
@@ -1016,14 +1029,13 @@ export function OpdAppointmentsView({
                 <input
                   type="text"
                   readOnly
-                  value={typeof window !== "undefined" ? `${window.location.origin}/book` : "http://localhost:3000/book"}
+                  value={bookingUrl}
                   className="flex-1 text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-slate-700 select-all"
                 />
                 <button
                   type="button"
                   onClick={() => {
-                    const url = typeof window !== "undefined" ? `${window.location.origin}/book` : "http://localhost:3000/book";
-                    navigator.clipboard.writeText(url);
+                    navigator.clipboard.writeText(bookingUrl);
                     setCopiedLink(true);
                     setTimeout(() => setCopiedLink(false), 2000);
                   }}
@@ -1040,9 +1052,7 @@ export function OpdAppointmentsView({
               <div className="inline-block p-4 bg-white rounded-2xl shadow-xs border border-slate-200">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(
-                    typeof window !== "undefined" ? `${window.location.origin}/book` : "http://localhost:3000/book"
-                  )}`}
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(bookingUrl)}`}
                   alt="Booking QR Code"
                   className="w-36 h-36 mx-auto"
                 />

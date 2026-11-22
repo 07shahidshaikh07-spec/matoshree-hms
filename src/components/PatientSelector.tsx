@@ -61,13 +61,13 @@ export function PatientSelector({
   }, []);
 
   // Filter patients based on search term
-  const filteredPatients = patients.filter((p) => {
+  const filteredPatients = (patients || []).filter((p) => {
     if (!searchTerm.trim()) return true;
     const q = searchTerm.toLowerCase().trim();
     return (
-      p.fullName.toLowerCase().includes(q) ||
-      p.patientId.toLowerCase().includes(q) ||
-      p.mobileNumber.includes(q)
+      (p?.fullName || "").toLowerCase().includes(q) ||
+      (p?.patientId || "").toLowerCase().includes(q) ||
+      (p?.mobileNumber || "").includes(q)
     );
   });
 

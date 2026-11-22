@@ -87,13 +87,13 @@ export function BillingView({
   };
 
   // Patient Search Results
-  const patientSearchResults = patients.filter((p) => {
+  const patientSearchResults = (patients || []).filter((p) => {
     if (!patientSearch.trim()) return false;
     const q = patientSearch.toLowerCase();
     return (
-      p.fullName.toLowerCase().includes(q) ||
-      p.patientId.toLowerCase().includes(q) ||
-      p.mobileNumber.includes(q)
+      (p?.fullName || "").toLowerCase().includes(q) ||
+      (p?.patientId || "").toLowerCase().includes(q) ||
+      (p?.mobileNumber || "").includes(q)
     );
   });
 
