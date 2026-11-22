@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "prisma generate && next build",
-    "render:build": "node scripts/prepare-deploy.mjs && prisma generate && prisma db push --accept-data-loss && prisma db seed && next build",
+    "render:build": "node scripts/prepare-deploy.mjs && prisma generate && prisma db push --accept-data-loss && node prisma/seed.mjs && next build",
     "start": "next start",
     "lint": "next lint",
     "db:neon": "node scripts/prepare-deploy.mjs postgresql && prisma generate",
@@ -15,7 +15,7 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:seed": "tsx prisma/seed.ts",
+    "db:seed": "node prisma/seed.mjs",
     "db:clean": "node scripts/clear-demo-data.mjs",
     "db:reset": "prisma migrate reset --force",
     "test": "node tests/run-tests.mjs",
@@ -26,6 +26,7 @@
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "@prisma/client": "5.20.0",
+    "prisma": "5.20.0",
     "zod": "3.23.8",
     "lucide-react": "0.446.0",
     "clsx": "2.1.1",
@@ -36,8 +37,6 @@
     "@types/node": "20.16.10",
     "@types/react": "18.3.10",
     "@types/react-dom": "18.3.0",
-    "prisma": "5.20.0",
-    "tsx": "4.19.1",
     "tailwindcss": "3.4.13",
     "postcss": "8.4.47",
     "autoprefixer": "10.4.20",
@@ -45,6 +44,6 @@
     "eslint-config-next": "14.2.15"
   },
   "prisma": {
-    "seed": "tsx prisma/seed.ts"
+    "seed": "node prisma/seed.mjs"
   }
 }
