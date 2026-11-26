@@ -7,6 +7,8 @@ import { createSessionToken, getAuthUser, SESSION_COOKIE, sessionMaxAgeSeconds }
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const failedLogins = new Map<string, { count: number; until: number }>();
+
 function sessionCookieOptions(maxAge: number) {
   return {
     httpOnly: true,
@@ -54,20 +56,32 @@ export async function GET(req: NextRequest) {
 // POST: sign in with email + password, sets the signed session cookie
 export async function POST(req: NextRequest) {
   try {
-    const { email, password } = await req.json();
-    if (!email || !password) {
-      return NextResponse.json({ error: "Email and password are required" }, { status: 400 });
+    const { email, userId, password } = await req.json();
+    if ((!email && !userId) || !password) {
+      return NextResponse.json({ error: "Select your account and enter the password" }, { status: 400 });
+    }
+
+    // Simple brute-force guard: 5 wrong passwords lock that account's sign-in for 60 seconds
+    const key = String(userId || email).trim().toLowerCase();
+    const now = Date.now();
+    const entry = failedLogins.get(key);
+    if (entry && entry.until > now) {
+      const secs = Math.ceil((entry.until - now) / 1000);
+      return NextResponse.json({ error: `Too many wrong attempts. Try again in ${secs} seconds.` }, { status: 429 });
     }
 
     const user = await prisma.user.findUnique({
-      where: { email: String(email).trim().toLowerCase() },
+      where: userId ? { id: String(userId) } : { email: String(email).trim().toLowerCase() },
       include: { doctorProfile: true }
     });
 
-    // Same message for unknown e-mail and wrong password (no account enumeration)
+    // Same message for unknown account and wrong password (no account enumeration)
     if (!user || !user.isActive || !verifyPassword(String(password), user.passwordHash)) {
-      return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
+      const count = (entry?.count ?? 0) + 1;
+      failedLogins.set(key, { count: count >= 5 ? 0 : count, until: count >= 5 ? now + 60_000 : 0 });
+      return NextResponse.json({ error: "Incorrect password" }, { status: 401 });
     }
+    failedLogins.delete(key);
 
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
