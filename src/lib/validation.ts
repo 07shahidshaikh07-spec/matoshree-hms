@@ -5,6 +5,19 @@
 // ============================================================================
 
 import { z } from "zod";
+import { VITAL_LIMITS, VitalKey, vitalRangeMessage } from "./vitals";
+
+/** Optional vital sign: blank/missing -> null, otherwise must be a number inside the clinical range. */
+function vitalField(key: VitalKey) {
+  const limit = VITAL_LIMITS[key] as { min: number; max: number; int: boolean };
+  const msg = vitalRangeMessage(key);
+  let num = z.number({ invalid_type_error: `${VITAL_LIMITS[key].label} must be a number` });
+  if (limit.int) num = num.int(`${VITAL_LIMITS[key].label} must be a whole number`);
+  return z.preprocess(
+    (v) => (v === "" || v === null || v === undefined ? null : typeof v === "string" ? Number(v) : v),
+    num.min(limit.min, msg).max(limit.max, msg).nullable().optional()
+  );
+}
 
 export const PatientRegistrationSchema = z.object({
   fullName: z.string().trim().min(2, "Patient full name is required (at least 2 characters)").max(120),
@@ -30,7 +43,7 @@ export const OPDVisitCreateSchema = z.object({
 export const AppointmentBookingSchema = z.object({
   patientId: z.string().min(1, "Patient is required"),
   doctorId: z.string().min(1, "Consulting doctor is required"),
-  appointmentDate: z.string().min(10, "Appointment date is required (YYYY-MM-DD)"),
+  appointmentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Appointment date is required (YYYY-MM-DD)"),
   slotTime: z.string().min(2, "Slot time is required (e.g. 10:30 AM)"),
   reasonForVisit: z.string().trim().max(300).optional().nullable()
 });
@@ -49,13 +62,13 @@ export const ConsultationSaveSchema = z.object({
   userId: z.string().optional(),
   vitals: z
     .object({
-      bloodPressureSys: z.coerce.number().int().min(50).max(260).optional().nullable(),
-      bloodPressureDia: z.coerce.number().int().min(30).max(160).optional().nullable(),
-      pulseRateBpm: z.coerce.number().int().min(30).max(220).optional().nullable(),
-      temperatureF: z.coerce.number().min(90).max(110).optional().nullable(),
-      spo2Percent: z.coerce.number().int().min(50).max(100).optional().nullable(),
-      weightKg: z.coerce.number().min(0.5).max(300).optional().nullable(),
-      heightCm: z.coerce.number().min(20).max(250).optional().nullable()
+      bloodPressureSys: vitalField("bloodPressureSys"),
+      bloodPressureDia: vitalField("bloodPressureDia"),
+      pulseRateBpm: vitalField("pulseRateBpm"),
+      temperatureF: vitalField("temperatureF"),
+      spo2Percent: vitalField("spo2Percent"),
+      weightKg: vitalField("weightKg"),
+      heightCm: vitalField("heightCm")
     })
     .optional()
     .nullable(),

@@ -1,21 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { BillCreateSchema, PaymentRecordSchema } from "@/lib/validation";
-import { assertPermission, StaffRoleType } from "@/lib/rbac";
+import { assertPermission } from "@/lib/rbac";
+import { requireUser } from "@/lib/session";
+import { apiError } from "@/lib/apiHelpers";
+import {
+  assertBillAccess,
+  assertDoctorChoice,
+  assertPatientAccess,
+  assertVisitAccess,
+  billWhereFor,
+  scopedDoctorId
+} from "@/lib/access";
 import { generateNextBillNumber, generateNextReceiptNumber, recordBillPayment } from "@/services/clinicCoreService";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(req: NextRequest) {
   try {
-    const role = (req.headers.get("x-user-role") || "RECEPTIONIST") as StaffRoleType;
-    assertPermission(role, "PATIENT_READ");
+    const user = await requireUser(req);
+    assertPermission(user.role, "PATIENT_READ");
+    const billScope = billWhereFor(user);
 
     const patientId = req.nextUrl.searchParams.get("patientId");
     const status = req.nextUrl.searchParams.get("status");
 
     const bills = await prisma.bill.findMany({
       where: {
-        ...(patientId ? { patientId } : {}),
-        ...(status ? { paymentStatus: status } : {})
+        AND: [
+          billScope,
+          ...(patientId ? [{ patientId }] : []),
+          ...(status ? [{ paymentStatus: status }] : [])
+        ]
       },
       include: {
         patient: true,
@@ -28,6 +45,7 @@ export async function GET(req: NextRequest) {
     });
 
     const recentPayments = await prisma.payment.findMany({
+      where: { bill: billScope },
       include: {
         bill: {
           include: {
@@ -58,19 +76,21 @@ export async function GET(req: NextRequest) {
       }
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: err.statusCode || 500 });
+    return apiError(err, 500);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const role = (req.headers.get("x-user-role") || "RECEPTIONIST") as StaffRoleType;
-    const actorUserId = req.headers.get("x-user-id") || undefined;
+    const user = await requireUser(req);
+    const role = user.role;
+    const actorUserId = user.id;
     const body = await req.json();
 
     // 1. Record an additional payment against an existing bill
     if (body.action === "RECORD_PAYMENT") {
       const parsed = PaymentRecordSchema.parse(body);
+      await assertBillAccess(user, parsed.billId);
       const payment = await recordBillPayment({
         actorUserId,
         actorRole: role,
@@ -84,6 +104,13 @@ export async function POST(req: NextRequest) {
     // 2. Create a new Bill
     assertPermission(role, "BILLING_CREATE");
     const parsed = BillCreateSchema.parse(body);
+
+    // Doctors can only bill their own patients, always under their own name.
+    const ownDoctorId = scopedDoctorId(user);
+    const billDoctorId = parsed.doctorId || ownDoctorId || null;
+    if (billDoctorId) assertDoctorChoice(user, billDoctorId);
+    await assertPatientAccess(user, parsed.patientId);
+    if (parsed.opdVisitId) await assertVisitAccess(user, parsed.opdVisitId);
 
     const subtotal = parsed.consultationCharges + parsed.additionalCharges;
     const totalAmount = Math.max(0, subtotal - parsed.discountAmount);
@@ -99,7 +126,7 @@ export async function POST(req: NextRequest) {
           billNumber,
           patientId: parsed.patientId,
           opdVisitId: parsed.opdVisitId ?? null,
-          doctorId: parsed.doctorId ?? null,
+          doctorId: billDoctorId,
           consultationCharges: parsed.consultationCharges,
           additionalCharges: parsed.additionalCharges,
           additionalChargesNotes: parsed.additionalChargesNotes ?? null,
@@ -156,6 +183,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ data: fullBill }, { status: 201 });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: err.statusCode || 400 });
+    return apiError(err);
   }
 }

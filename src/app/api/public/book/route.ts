@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { z } from "zod";
-import { generateNextPatientId } from "@/services/clinicCoreService";
+import {
+  generateNextAppointmentNumber,
+  generateNextPatientId,
+  nextAppointmentToken
+} from "@/services/clinicCoreService";
+import { istDateString, istDayRange, istDayStart, isValidDateString } from "@/lib/timezone";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 // Validation schema for public patient booking
 const PublicBookingSchema = z.object({
@@ -47,14 +55,13 @@ export async function GET(req: NextRequest) {
 
     let bookedSlots: string[] = [];
 
-    if (doctorId && dateParam) {
-      const apptDate = new Date(dateParam);
-      apptDate.setHours(0, 0, 0, 0);
+    if (doctorId && dateParam && isValidDateString(dateParam)) {
+      const { start, end } = istDayRange(dateParam);
 
       const existingAppts = await prisma.appointment.findMany({
         where: {
           doctorId,
-          appointmentDate: apptDate,
+          appointmentDate: { gte: start, lt: end },
           status: { notIn: ["CANCELLED", "NO_SHOW"] }
         },
         select: { slotTime: true }
@@ -93,8 +100,14 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const parsed = PublicBookingSchema.parse(body);
 
-    const apptDate = new Date(parsed.appointmentDate);
-    apptDate.setHours(0, 0, 0, 0);
+    if (!isValidDateString(parsed.appointmentDate)) {
+      return NextResponse.json({ error: "Please choose a valid appointment date." }, { status: 400 });
+    }
+    if (parsed.appointmentDate < istDateString()) {
+      return NextResponse.json({ error: "Appointment date cannot be in the past." }, { status: 400 });
+    }
+    const apptDate = istDayStart(parsed.appointmentDate);
+    const { start: dayStart, end: dayEnd } = istDayRange(parsed.appointmentDate);
 
     // 1. Verify doctor exists
     const doctor = await prisma.doctorProfile.findUnique({
@@ -108,7 +121,7 @@ export async function POST(req: NextRequest) {
     const existingSlot = await prisma.appointment.findFirst({
       where: {
         doctorId: parsed.doctorId,
-        appointmentDate: apptDate,
+        appointmentDate: { gte: dayStart, lt: dayEnd },
         slotTime: parsed.slotTime,
         status: { notIn: ["CANCELLED", "NO_SHOW"] }
       }
@@ -142,28 +155,60 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 4. Generate sequential Appointment Number
-    const count = await prisma.appointment.count();
-    const appointmentNumber = `APT-${new Date().getFullYear()}-${String(count + 1).padStart(4, "0")}`;
-
+    // 4. Appointment number + token, saved with the appointment
     const rawReason = parsed.reasonForVisit?.trim() || "General Consultation";
     const formattedReason = `[Online Booking] ${rawReason}`;
 
-    const appointment = await prisma.appointment.create({
-      data: {
-        appointmentNumber,
-        patientId: patient.id,
-        doctorId: doctor.id,
-        appointmentDate: apptDate,
-        slotTime: parsed.slotTime,
-        reasonForVisit: formattedReason,
-        status: "SCHEDULED"
-      },
-      include: {
-        patient: true,
-        doctor: true
+    let appointment: any = null;
+    for (let attempt = 0; attempt < 3 && !appointment; attempt++) {
+      try {
+        const appointmentNumber = await generateNextAppointmentNumber();
+        const tokenNumber = await nextAppointmentToken(doctor.id, parsed.appointmentDate);
+
+        appointment = await prisma.$transaction(async (tx) => {
+          // Release the unique slot key held by an earlier cancelled / no-show booking
+          const stale = await tx.appointment.findMany({
+            where: {
+              doctorId: doctor.id,
+              appointmentDate: { gte: dayStart, lt: dayEnd },
+              slotTime: parsed.slotTime,
+              status: { in: ["CANCELLED", "NO_SHOW"] }
+            },
+            select: { id: true, appointmentNumber: true, slotTime: true }
+          });
+          for (const st of stale) {
+            await tx.appointment.update({
+              where: { id: st.id },
+              data: { slotTime: `${st.slotTime} (released ${st.appointmentNumber})` }
+            });
+          }
+
+          return tx.appointment.create({
+            data: {
+              appointmentNumber,
+              tokenNumber,
+              patientId: patient!.id,
+              doctorId: doctor.id,
+              appointmentDate: apptDate,
+              slotTime: parsed.slotTime,
+              reasonForVisit: formattedReason,
+              status: "SCHEDULED"
+            },
+            include: { patient: true, doctor: true }
+          });
+        });
+      } catch (e: any) {
+        const target = JSON.stringify(e?.meta?.target ?? "");
+        if (e?.code === "P2002" && /appointmentNumber/i.test(target) && attempt < 2) continue;
+        if (e?.code === "P2002") {
+          return NextResponse.json(
+            { error: `Slot ${parsed.slotTime} was just booked by someone else. Please choose another time slot.` },
+            { status: 409 }
+          );
+        }
+        throw e;
       }
-    });
+    }
 
     // 5. Fetch clinic details for confirmation slip
     const clinic = await prisma.clinicSetting.findUnique({ where: { id: "default" } });
@@ -175,6 +220,7 @@ export async function POST(req: NextRequest) {
         data: {
           appointmentId: appointment.id,
           appointmentNumber: appointment.appointmentNumber,
+          tokenNumber: appointment.tokenNumber,
           appointmentDate: parsed.appointmentDate,
           slotTime: appointment.slotTime,
           reasonForVisit: rawReason,
@@ -183,10 +229,12 @@ export async function POST(req: NextRequest) {
           patient: {
             id: patient.id,
             patientId: patient.patientId,
-            fullName: patient.fullName,
-            mobileNumber: patient.mobileNumber,
-            age: patient.age,
-            gender: patient.gender
+            // Echo what the visitor typed, never stored details of an existing patient
+            // matched by mobile number (this endpoint is public).
+            fullName: parsed.fullName,
+            mobileNumber: parsed.mobileNumber,
+            age: parsed.age,
+            gender: parsed.gender
           },
           doctor: {
             id: doctor.id,

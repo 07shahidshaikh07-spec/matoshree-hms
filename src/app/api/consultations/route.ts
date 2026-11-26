@@ -1,20 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { ConsultationSaveSchema } from "@/lib/validation";
-import { assertPermission, StaffRoleType } from "@/lib/rbac";
+import { assertPermission } from "@/lib/rbac";
+import { requireUser } from "@/lib/session";
+import { apiError } from "@/lib/apiHelpers";
+import { assertPatientAccess, consultationWhereFor, scopedDoctorId } from "@/lib/access";
 import { generateNextPrescriptionNumber } from "@/services/clinicCoreService";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(req: NextRequest) {
   try {
-    const role = (req.headers.get("x-user-role") || "RECEPTIONIST") as StaffRoleType;
-    assertPermission(role, "CONSULTATION_READ");
+    const user = await requireUser(req);
+    assertPermission(user.role, "CONSULTATION_READ");
+    const scope = consultationWhereFor(user);
 
     const opdVisitId = req.nextUrl.searchParams.get("opdVisitId");
     const patientId = req.nextUrl.searchParams.get("patientId");
 
     if (opdVisitId) {
-      const consult = await prisma.consultation.findUnique({
-        where: { opdVisitId },
+      const consult = await prisma.consultation.findFirst({
+        where: { opdVisitId, ...scope },
         include: {
           vitals: true,
           prescriptions: { include: { items: true } },
@@ -26,8 +33,9 @@ export async function GET(req: NextRequest) {
     }
 
     if (patientId) {
+      await assertPatientAccess(user, patientId);
       const history = await prisma.consultation.findMany({
-        where: { patientId },
+        where: { patientId, ...scope },
         include: {
           vitals: true,
           prescriptions: { include: { items: true } },
@@ -39,6 +47,7 @@ export async function GET(req: NextRequest) {
     }
 
     const recent = await prisma.consultation.findMany({
+      where: scope,
       include: {
         doctor: true,
         patient: true,
@@ -50,29 +59,38 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ data: recent });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: err.statusCode || 500 });
+    return apiError(err, 500);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
+    const user = await requireUser(req);
     const body = await req.json();
-    let role = (req.headers.get("x-user-role") || body.userRole || "DOCTOR") as StaffRoleType;
-    const actorUserId = req.headers.get("x-user-id") || body.userId || undefined;
+    const role = user.role;
+    const actorUserId = user.id;
 
-    // In Matoshree Clinic, consultations and prescriptions are finalized under the assigned doctor's authority.
-    // If the active header role is RECEPTIONIST but a valid doctor is assigned, authorize as DOCTOR.
-    if (role === "RECEPTIONIST" && (body.doctorId || body.userRole === "DOCTOR")) {
-      role = "DOCTOR";
-    }
-
-    // Clinicians (DOCTOR / ADMINISTRATOR) can finalize clinical notes and sign prescriptions
+    // Only clinicians (DOCTOR / ADMINISTRATOR) can finalize clinical notes and sign prescriptions
     assertPermission(role, "CONSULTATION_WRITE");
     assertPermission(role, "CONSULTATION_FINALIZE");
     assertPermission(role, "PRESCRIPTION_CREATE");
     assertPermission(role, "PRESCRIPTION_FINALIZE");
 
-    const parsed = ConsultationSaveSchema.parse(body);
+    const input = ConsultationSaveSchema.parse(body);
+
+    // The visit is the source of truth for patient + doctor; never trust ids sent by the browser.
+    const visit = await prisma.oPDVisit.findUnique({
+      where: { id: input.opdVisitId },
+      select: { id: true, patientId: true, doctorId: true }
+    });
+    if (!visit) {
+      return NextResponse.json({ error: "OPD visit not found." }, { status: 404 });
+    }
+    const ownDoctorId = scopedDoctorId(user);
+    if (ownDoctorId && visit.doctorId !== ownDoctorId) {
+      return NextResponse.json({ error: "Access denied: this patient is assigned to another doctor." }, { status: 403 });
+    }
+    const parsed = { ...input, patientId: visit.patientId, doctorId: visit.doctorId };
 
     const result = await prisma.$transaction(async (tx) => {
       // Create or update consultation for this OPD visit
@@ -183,6 +201,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ data: result }, { status: 201 });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: err.statusCode || 400 });
+    return apiError(err);
   }
 }

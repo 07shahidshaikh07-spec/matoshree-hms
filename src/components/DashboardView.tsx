@@ -22,6 +22,7 @@ interface DashboardViewProps {
     summaryCards: {
       todayPatientsCount: number;
       todayAppointmentsCount: number;
+      newPatientsCount?: number;
       pendingPaymentsAmount: number;
       todayCollectionTotal: number;
       cashCollection: number;
@@ -29,7 +30,9 @@ interface DashboardViewProps {
       otherCollection: number;
     };
     todayVisits: any[];
+    todayAppointments?: any[];
     upcomingAppointments: any[];
+    newPatientsToday?: any[];
   } | null;
   loading: boolean;
   onQuickAction: (action: "register_patient" | "new_opd_visit" | "new_appointment" | "create_bill") => void;
@@ -95,6 +98,8 @@ export function DashboardView({
   };
   const todayVisits = data.todayVisits || [];
   const upcomingAppointments = data.upcomingAppointments || [];
+  const todayAppointments = data.todayAppointments || [];
+  const newPatientsToday = data.newPatientsToday || [];
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-5 sm:space-y-6">
@@ -162,7 +167,9 @@ export function DashboardView({
           <div>
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Today&apos;s Patients</span>
             <h3 className="text-2xl font-bold text-slate-900 mt-1">{summaryCards.todayPatientsCount}</h3>
-            <p className="text-[11px] text-slate-400 mt-0.5">OPD visits &amp; appointments</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              OPD, appointments &amp; {summaryCards.newPatientsCount ?? newPatientsToday.length} newly registered
+            </p>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-[#E6F7F4] text-[#258B7C] flex items-center justify-center flex-shrink-0">
             <Users className="w-6 h-6" />
@@ -418,6 +425,129 @@ export function DashboardView({
                 <span>{formatINR(summaryCards.pendingPaymentsAmount)}</span>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Today's Appointments & Newly Registered Patients */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Today's Appointments (with token numbers) */}
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Calendar className="w-5 h-5 text-sky-600" />
+              <h2 className="font-bold text-sm text-slate-800">Today&apos;s Appointments</h2>
+              <span className="bg-sky-50 text-sky-700 text-[11px] font-bold px-2 py-0.5 rounded-full">
+                {todayAppointments.length}
+              </span>
+            </div>
+            <button
+              onClick={() => onQuickAction("new_appointment")}
+              type="button"
+              className="text-xs font-semibold text-[#258B7C] hover:underline"
+            >
+              + Book
+            </button>
+          </div>
+          <div className="p-3">
+            {todayAppointments.length === 0 ? (
+              <p className="text-xs text-slate-400 text-center py-4">No appointments booked for today.</p>
+            ) : (
+              <div className="space-y-2">
+                {todayAppointments.map((appt) => {
+                  const canConvert =
+                    !appt.opdVisit && (appt.status === "SCHEDULED" || appt.status === "CONFIRMED");
+                  return (
+                    <div
+                      key={appt.id}
+                      className="p-2.5 rounded-xl border border-slate-100 bg-[#F7F9FA] flex items-center justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {appt.tokenNumber ? (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#258B7C] text-white">
+                              Token {appt.tokenNumber}
+                            </span>
+                          ) : null}
+                          <p className="text-xs font-bold text-slate-900 truncate">{appt.patient.fullName}</p>
+                          {appt.reasonForVisit?.includes("[Online Booking]") && (
+                            <span className="text-[9px] font-bold px-1.5 rounded bg-[#E6F7F4] text-[#258B7C] border border-[#70CFBA]/40">
+                              🌐 Online
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          {appt.doctor.doctorName} •{" "}
+                          <span className="font-semibold text-slate-700">{appt.slotTime}</span> • {appt.appointmentNumber}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-600">
+                          {appt.opdVisit ? "IN OPD" : appt.status}
+                        </span>
+                        {canConvert && (
+                          <button
+                            onClick={() => onConvertAppointment(appt.id)}
+                            type="button"
+                            className="bg-white hover:bg-slate-100 text-[#258B7C] border border-[#258B7C] px-2.5 py-1 rounded-lg text-[11px] font-semibold transition"
+                          >
+                            Check-in
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Newly Registered Patients */}
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <UserPlus className="w-5 h-5 text-[#258B7C]" />
+              <h2 className="font-bold text-sm text-slate-800">Newly Registered Today</h2>
+              <span className="bg-[#E6F7F4] text-[#258B7C] text-[11px] font-bold px-2 py-0.5 rounded-full">
+                {newPatientsToday.length}
+              </span>
+            </div>
+            <button
+              onClick={() => onQuickAction("register_patient")}
+              type="button"
+              className="text-xs font-semibold text-[#258B7C] hover:underline"
+            >
+              + Register
+            </button>
+          </div>
+          <div className="p-3">
+            {newPatientsToday.length === 0 ? (
+              <p className="text-xs text-slate-400 text-center py-4">No new patients registered today.</p>
+            ) : (
+              <div className="space-y-2">
+                {newPatientsToday.map((p) => (
+                  <div
+                    key={p.id}
+                    className="p-2.5 rounded-xl border border-slate-100 bg-[#F7F9FA] flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <button
+                        onClick={() => onOpenPatientProfile(p.id)}
+                        type="button"
+                        className="text-xs font-bold text-slate-900 hover:text-[#258B7C] text-left truncate block"
+                      >
+                        {p.fullName}
+                      </button>
+                      <p className="text-[11px] text-slate-500">
+                        {p.patientId} • {p.age}Y/{p.gender} • {p.mobileNumber}
+                      </p>
+                    </div>
+                    <span className="text-[10px] text-slate-400 flex-shrink-0">{formatISTTime(p.createdAt)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

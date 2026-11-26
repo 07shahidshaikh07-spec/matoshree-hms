@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { formatISTDate, formatINR } from "@/lib/timezone";
 import {
   Users,
@@ -75,12 +75,11 @@ export function PatientsView({
     );
   });
 
-  // Load single patient profile with complete history
-  const handleOpenProfile = async (id: string) => {
-    setSelectedPatientId(id);
-    setLoadingProfile(true);
+  // Load single patient profile with complete history (silent = background refresh, no spinner)
+  const loadProfile = async (id: string, silent = false) => {
+    if (!silent) setLoadingProfile(true);
     try {
-      const res = await fetch(`/api/patients?id=${id}`);
+      const res = await fetch(`/api/patients?id=${id}`, { cache: "no-store" });
       const json = await res.json();
       if (json.data) {
         setPatientDetails(json.data);
@@ -88,9 +87,24 @@ export function PatientsView({
     } catch (e) {
       console.error(e);
     } finally {
-      setLoadingProfile(false);
+      if (!silent) setLoadingProfile(false);
     }
   };
+
+  const handleOpenProfile = async (id: string) => {
+    setSelectedPatientId(id);
+    await loadProfile(id);
+  };
+
+  // Keep an open patient profile current (new visits, prescriptions, payments) without a manual refresh
+  useEffect(() => {
+    if (!selectedPatientId) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") loadProfile(selectedPatientId, true);
+    }, 15000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPatientId]);
 
   // Submit Registration (<1 minute form)
   const handleRegisterSubmit = async (overrideDuplicates = false) => {

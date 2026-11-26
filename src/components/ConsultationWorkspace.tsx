@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { formatISTDate, formatISTDateTime } from "@/lib/timezone";
+import { validateVitalValues } from "@/lib/vitals";
 import {
   Stethoscope,
   Activity,
@@ -228,7 +229,9 @@ export function ConsultationWorkspace({
   const [height, setHeight] = useState<string>("");
 
   // Clinical Notes State (Optional per prompt, no asterisk, no explicit "optional" written)
-  const [chiefComplaint, setChiefComplaint] = useState(visit.reasonForVisit || "");
+  const [chiefComplaint, setChiefComplaint] = useState(
+    (visit.reasonForVisit || "").replace("[Online Booking]", "").trim()
+  );
   const [hpi, setHpi] = useState("");
   const [findings, setFindings] = useState("");
   const [diagnosis, setDiagnosis] = useState("");
@@ -257,10 +260,7 @@ export function ConsultationWorkspace({
       setLoading(true);
       try {
         const res = await fetch(`/api/consultations?opdVisitId=${visit.id}`, {
-          headers: {
-            "x-user-role": currentUserRole || "DOCTOR",
-            "x-user-id": currentUserId || ""
-          }
+          cache: "no-store"
         });
         const json = await res.json();
         if (json.data) {
@@ -364,6 +364,22 @@ export function ConsultationWorkspace({
   const handleFinalize = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Check vitals first and say exactly which value is wrong, instead of a raw server error
+    const vitalProblems = validateVitalValues({
+      bloodPressureSys: bpSys,
+      bloodPressureDia: bpDia,
+      pulseRateBpm: pulse,
+      temperatureF: temp,
+      spo2Percent: spo2,
+      weightKg: weight,
+      heightCm: height
+    });
+    if (vitalProblems.length > 0) {
+      setErrorMsg("Please correct the vitals before saving:\n• " + vitalProblems.join("\n• "));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
     setSubmitting(true);
     setErrorMsg(null);
 
@@ -410,16 +426,15 @@ export function ConsultationWorkspace({
     try {
       const res = await fetch("/api/consultations", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-user-role": currentUserRole || "DOCTOR",
-          "x-user-id": currentUserId || visit.doctorId || ""
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to finalize consultation");
+      if (!res.ok) {
+        if (res.status === 401) throw new Error("Your session has expired. Please sign in again.");
+        throw new Error(json.error || "Failed to finalize consultation");
+      }
 
       onRefresh();
 
@@ -437,6 +452,7 @@ export function ConsultationWorkspace({
       }
     } catch (err: any) {
       setErrorMsg(err.message);
+      window.scrollTo({ top: 0, behavior: "smooth" });
     } finally {
       setSubmitting(false);
     }
@@ -523,12 +539,12 @@ export function ConsultationWorkspace({
       {errorMsg && (
         <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs flex items-center gap-2">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
-          <span>{errorMsg}</span>
+          <span className="whitespace-pre-line">{errorMsg}</span>
         </div>
       )}
 
       {/* Main Consultation Form */}
-      <form onSubmit={handleFinalize} className="space-y-6">
+      <form onSubmit={handleFinalize} noValidate className="space-y-6">
         {/* Section A: Vitals */}
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-5 space-y-3">
           <div className="flex items-center gap-2 pb-2 border-b border-slate-100">

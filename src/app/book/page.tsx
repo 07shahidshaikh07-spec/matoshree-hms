@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { buildAppointmentMarathiMessage, whatsappUrl } from "@/lib/whatsapp";
+import { istDateString } from "@/lib/timezone";
 import {
   Calendar as CalendarIcon,
   Clock,
@@ -57,7 +59,7 @@ export default function PublicBookingPage() {
   const upcomingDates = Array.from({ length: 7 }, (_, i) => {
     const d = new Date();
     d.setDate(d.getDate() + i);
-    const dateStr = d.toISOString().split("T")[0];
+    const dateStr = istDateString(d);
     const dayName = i === 0 ? "Today" : i === 1 ? "Tomorrow" : d.toLocaleDateString("en-IN", { weekday: "short" });
     const formatted = d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
     return { dateStr, dayName, formatted };
@@ -75,7 +77,7 @@ export default function PublicBookingPage() {
           if (json.doctors?.length > 0) {
             setSelectedDoctorId(json.doctors[0].id);
           }
-          const todayStr = new Date().toISOString().split("T")[0];
+          const todayStr = istDateString();
           setSelectedDate(todayStr);
         }
       } catch (err) {
@@ -184,18 +186,22 @@ export default function PublicBookingPage() {
   const morningSlots = slotsAvailability.filter((s) => s.slot.includes("AM") || s.slot.startsWith("12:"));
   const eveningSlots = slotsAvailability.filter((s) => !morningSlots.includes(s));
 
-  // WhatsApp share text generator
+  // WhatsApp share text (Marathi)
   const getWhatsAppShareUrl = () => {
     if (!confirmationData) return "";
-    const text = `🏥 *Matoshree Clinic Appointment Confirmed*\n\n` +
-      `Appointment No: *${confirmationData.appointmentNumber}*\n` +
-      `Patient: *${confirmationData.patient.fullName}* (${confirmationData.patient.patientId})\n` +
-      `Doctor: *${confirmationData.doctor.doctorName}*\n` +
-      `Date: *${confirmationData.appointmentDate}*\n` +
-      `Time Slot: *${confirmationData.slotTime}*\n` +
-      `Location: *${confirmationData.clinic.addressLine}*\n\n` +
-      `Please arrive 10 minutes prior to your time slot.`;
-    return `https://wa.me/?text=${encodeURIComponent(text)}`;
+    const text = buildAppointmentMarathiMessage({
+      clinicName: confirmationData.clinic?.clinicName,
+      addressLine: confirmationData.clinic?.addressLine,
+      contactPhone: confirmationData.clinic?.contactPhone,
+      patientName: confirmationData.patient.fullName,
+      appointmentNumber: confirmationData.appointmentNumber,
+      tokenNumber: confirmationData.tokenNumber,
+      doctorName: confirmationData.doctor.doctorName,
+      dateStr: confirmationData.appointmentDate,
+      slotTime: confirmationData.slotTime,
+      reason: confirmationData.reasonForVisit
+    });
+    return whatsappUrl(text);
   };
 
   if (loadingInitial) {
@@ -260,11 +266,30 @@ export default function PublicBookingPage() {
             </div>
 
             {/* Printable Slip Card */}
-            <div className="bg-[#F7F9FA] rounded-2xl p-6 border-2 border-dashed border-[#70CFBA] space-y-4">
+            <div
+              id="printable-appointment-slip"
+              className="bg-[#F7F9FA] rounded-2xl p-6 border-2 border-dashed border-[#70CFBA] space-y-4"
+            >
+              <div className="text-center pb-2 border-b border-slate-200">
+                <p className="text-lg font-extrabold text-[#258B7C] tracking-tight">
+                  {confirmationData.clinic?.clinicName || "Matoshree Clinic"}
+                </p>
+                <p className="text-[11px] text-slate-500">Appointment Slip</p>
+              </div>
+              {confirmationData.tokenNumber ? (
+                <div className="flex items-center justify-between bg-[#E6F7F4] border border-[#70CFBA]/60 rounded-xl px-4 py-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-[#1d6f63]">
+                    Token Number (टोकन क्र.)
+                  </span>
+                  <span className="text-3xl font-extrabold text-[#258B7C] leading-none">
+                    {confirmationData.tokenNumber}
+                  </span>
+                </div>
+              ) : null}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
                 <div>
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    Appointment Token
+                    Appointment No.
                   </span>
                   <p className="text-xl font-mono font-extrabold text-[#258B7C]">
                     {confirmationData.appointmentNumber}
@@ -340,7 +365,9 @@ export default function PublicBookingPage() {
               <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-600" />
               <p>
                 Please arrive at the clinic reception <strong>10 minutes before</strong> your scheduled time slot.
-                Show this appointment number at the front desk to receive your consultation entry token.
+                Show this appointment number and token at the front desk.
+                <br />
+                कृपया आपल्या वेळेच्या १० मिनिटे आधी क्लिनिकमध्ये यावे आणि अपॉइंटमेंट क्रमांक रिसेप्शनवर दाखवावा.
               </p>
             </div>
 
@@ -353,7 +380,7 @@ export default function PublicBookingPage() {
                 className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-5 py-3 bg-[#25D366] hover:bg-[#20ba5a] text-white rounded-xl text-xs font-bold shadow-sm transition"
               >
                 <Share2 className="w-4 h-4" />
-                <span>Share Details via WhatsApp</span>
+                <span>WhatsApp वर शेअर करा (मराठी)</span>
               </a>
 
               <button
@@ -471,7 +498,7 @@ export default function PublicBookingPage() {
                 <input
                   type="date"
                   value={selectedDate}
-                  min={new Date().toISOString().split("T")[0]}
+                  min={istDateString()}
                   onChange={(e) => setSelectedDate(e.target.value)}
                   className="text-xs p-1.5 border border-slate-200 rounded-xl focus:outline-none focus:border-[#258B7C]"
                 />

@@ -1,24 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { assertPermission, StaffRoleType } from "@/lib/rbac";
+import { assertPermission, hasPermission } from "@/lib/rbac";
 import { hashPassword } from "@/lib/auth";
+import { getAuthUser, requireUser } from "@/lib/session";
+import { apiError } from "@/lib/apiHelpers";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+// GET stays reachable without a session (Render health check + clinic header), but staff
+// e-mails / phone numbers / account list are only returned to users allowed to manage settings.
 export async function GET(req: NextRequest) {
   try {
+    const user = await getAuthUser(req);
+    const canManage = !!user && hasPermission(user.role, "SETTINGS_MANAGE");
+
     const [setting, doctors, users] = await Promise.all([
       prisma.clinicSetting.findUnique({ where: { id: "default" } }),
-      prisma.doctorProfile.findMany({ include: { user: { select: { email: true, mobileNumber: true } } } }),
-      prisma.user.findMany({
-        select: {
-          id: true,
-          employeeCode: true,
-          fullName: true,
-          email: true,
-          mobileNumber: true,
-          role: true,
-          isActive: true
-        }
-      })
+      prisma.doctorProfile.findMany({
+        include: canManage ? { user: { select: { email: true, mobileNumber: true } } } : undefined
+      }),
+      canManage
+        ? prisma.user.findMany({
+            where: user!.role === "ADMINISTRATOR" ? undefined : { id: user!.id },
+            select: {
+              id: true,
+              employeeCode: true,
+              fullName: true,
+              email: true,
+              mobileNumber: true,
+              role: true,
+              isActive: true
+            }
+          })
+        : Promise.resolve([])
     ]);
 
     return NextResponse.json({
@@ -29,14 +44,14 @@ export async function GET(req: NextRequest) {
       }
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return apiError(err, 500);
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const role = (req.headers.get("x-user-role") || "DOCTOR") as StaffRoleType;
-    assertPermission(role, "SETTINGS_MANAGE");
+    const authUser = await requireUser(req);
+    assertPermission(authUser.role, "SETTINGS_MANAGE");
 
     const body = await req.json();
 
@@ -90,6 +105,10 @@ export async function POST(req: NextRequest) {
       if (!userId || !newPassword || newPassword.length < 6) {
         return NextResponse.json({ error: "User ID and password (min 6 chars) required" }, { status: 400 });
       }
+      // One doctor must not be able to take over the other doctor's (or the receptionist's) account.
+      if (authUser.role !== "ADMINISTRATOR" && userId !== authUser.id) {
+        return NextResponse.json({ error: "You can only change your own password." }, { status: 403 });
+      }
 
       const passwordHash = hashPassword(newPassword);
       await prisma.user.update({
@@ -101,6 +120,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: err.statusCode || 400 });
+    return apiError(err);
   }
 }

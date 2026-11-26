@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Sidebar, NavModule } from "../components/Sidebar";
 import { DashboardView } from "../components/DashboardView";
 import { PatientsView } from "../components/PatientsView";
@@ -14,21 +14,20 @@ import {
   PrintablePrescriptionModal,
   PrintableReceiptModal
 } from "../components/PrintableDocuments";
+import { PrintableAppointmentSlipModal, AppointmentSlipData } from "../components/AppointmentSlip";
 import { UserCheck, Menu } from "lucide-react";
+
+// How often open screens silently re-read the clinic data (ms)
+const AUTO_REFRESH_MS = 15000;
 
 export default function AppHome() {
   const [activeModule, setActiveModule] = useState<NavModule>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // Initial Mock Active User (will be loaded/switched)
-  const [currentUser, setCurrentUser] = useState<any>({
-    id: "default-doc-1",
-    fullName: "Dr. Vinod Korale",
-    email: "dr.vinod@matoshreeclinic.in",
-    role: "DOCTOR"
-  });
+  // Signed-in staff member (null until the server confirms the session cookie)
+  const [currentUser, setCurrentUser] = useState<any | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
 
-  const [allUsers, setAllUsers] = useState<any[]>([]);
   const [doctors, setDoctors] = useState<any[]>([]);
   const [clinicSetting, setClinicSetting] = useState<any | null>(null);
 
@@ -39,6 +38,7 @@ export default function AppHome() {
   const [appointments, setAppointments] = useState<any[]>([]);
   const [bills, setBills] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [lastSynced, setLastSynced] = useState<Date | null>(null);
 
   // Active Consultation Workspace State (if opening a specific visit)
   const [activeConsultationVisit, setActiveConsultationVisit] = useState<any | null>(null);
@@ -47,6 +47,7 @@ export default function AppHome() {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [prescriptionPrintData, setPrescriptionPrintData] = useState<any | null>(null);
   const [receiptPrintData, setReceiptPrintData] = useState<any | null>(null);
+  const [appointmentSlip, setAppointmentSlip] = useState<AppointmentSlipData | null>(null);
 
   // Patient Preselection for Appointment or OPD
   const [preselectedPatientForAppt, setPreselectedPatientForAppt] = useState<any | null>(null);
@@ -54,45 +55,34 @@ export default function AppHome() {
   const [autoOpenBookingModal, setAutoOpenBookingModal] = useState(false);
   const [opdAppointmentsTab, setOpdAppointmentsTab] = useState<"opd" | "appointments">("opd");
 
-  // 1. Initial Load of Clinic Users & Settings
-  const loadInitialMeta = async () => {
+  // A doctor can only book / bill under their own name; front desk can pick either doctor.
+  const visibleDoctors =
+    currentUser?.role === "DOCTOR" && currentUser?.doctorProfile?.id
+      ? doctors.filter((d) => d.id === currentUser.doctorProfile.id)
+      : doctors;
+
+  const refreshing = useRef(false);
+
+  // 1. Ask the server who is signed in (the session lives in an httpOnly cookie)
+  const loadSession = useCallback(async () => {
     try {
-      // Check if user was previously saved in localStorage
-      let savedUser: any = null;
-      if (typeof window !== "undefined") {
-        const stored = localStorage.getItem("matoshree_current_user");
-        if (stored) {
-          try {
-            savedUser = JSON.parse(stored);
-          } catch (e) {
-            console.error(e);
-          }
-        }
+      const res = await fetch("/api/auth", { cache: "no-store" });
+      if (res.ok) {
+        const json = await res.json();
+        setCurrentUser(json.user || null);
+      } else {
+        setCurrentUser(null);
       }
+    } catch (e) {
+      console.error("Session check failed:", e);
+    } finally {
+      setAuthChecked(true);
+    }
+  }, []);
 
-      const resUsers = await fetch("/api/auth").catch(() => null);
-      if (resUsers && resUsers.ok) {
-        const jsonUsers = await resUsers.json().catch(() => null);
-        if (jsonUsers?.users && jsonUsers.users.length > 0) {
-          setAllUsers(jsonUsers.users);
-          if (savedUser && savedUser.id) {
-            const matched = jsonUsers.users.find((u: any) => u.id === savedUser.id);
-            if (matched) {
-              setCurrentUser(matched);
-            }
-          } else {
-            // Find Dr. Vinod Korale as initial user if not set
-            const docVinod = jsonUsers.users.find((u: any) => u.fullName && u.fullName.includes("Vinod"));
-            if (docVinod) {
-              setCurrentUser(docVinod);
-            } else {
-              setCurrentUser(jsonUsers.users[0]);
-            }
-          }
-        }
-      }
-
-      const resSettings = await fetch("/api/settings").catch(() => null);
+  const loadClinicMeta = useCallback(async () => {
+    try {
+      const resSettings = await fetch("/api/settings", { cache: "no-store" }).catch(() => null);
       if (resSettings && resSettings.ok) {
         const jsonSettings = await resSettings.json().catch(() => null);
         if (jsonSettings?.data) {
@@ -103,19 +93,40 @@ export default function AppHome() {
     } catch (e) {
       console.error("Meta load error:", e);
     }
-  };
+  }, []);
 
-  // 2. Fetch Core Clinic Data
-  const refreshAllData = async () => {
-    setLoading(true);
+  const clearClinicData = useCallback(() => {
+    setDashboardData(null);
+    setPatients([]);
+    setVisits([]);
+    setAppointments([]);
+    setBills([]);
+    setActiveConsultationVisit(null);
+    setPrescriptionPrintData(null);
+    setReceiptPrintData(null);
+    setAppointmentSlip(null);
+  }, []);
+
+  // 2. Fetch core clinic data. silent=true is used by the background auto-refresh (no spinner).
+  const refreshAllData = useCallback(async (silent = false) => {
+    if (refreshing.current) return;
+    refreshing.current = true;
+    if (!silent) setLoading(true);
     try {
       const [dashRes, patRes, opdRes, apptRes, billRes] = await Promise.all([
-        fetch("/api/dashboard").catch(() => null),
-        fetch("/api/patients").catch(() => null),
-        fetch("/api/opd").catch(() => null),
-        fetch("/api/appointments").catch(() => null),
-        fetch("/api/billing").catch(() => null)
+        fetch("/api/dashboard", { cache: "no-store" }).catch(() => null),
+        fetch("/api/patients", { cache: "no-store" }).catch(() => null),
+        fetch("/api/opd", { cache: "no-store" }).catch(() => null),
+        fetch("/api/appointments", { cache: "no-store" }).catch(() => null),
+        fetch("/api/billing", { cache: "no-store" }).catch(() => null)
       ]);
+
+      // Session expired (or the account was disabled) -> back to the sign-in screen
+      if ([dashRes, patRes, opdRes, apptRes, billRes].some((r) => r && r.status === 401)) {
+        setCurrentUser(null);
+        clearClinicData();
+        return;
+      }
 
       const [dashJson, patJson, opdJson, apptJson, billJson] = await Promise.all([
         dashRes && dashRes.ok ? dashRes.json().catch(() => null) : null,
@@ -130,17 +141,56 @@ export default function AppHome() {
       if (opdJson?.data) setVisits(opdJson.data);
       if (apptJson?.data) setAppointments(apptJson.data);
       if (billJson?.data?.bills) setBills(billJson.data.bills);
+      setLastSynced(new Date());
     } catch (e) {
       console.error("Data refresh error:", e);
     } finally {
-      setLoading(false);
+      refreshing.current = false;
+      if (!silent) setLoading(false);
     }
-  };
+  }, [clearClinicData]);
 
+  // On first load: who am I?
   useEffect(() => {
-    loadInitialMeta();
+    loadSession();
+  }, [loadSession]);
+
+  // Once signed in (or after switching accounts) load the clinic + that user's own data
+  const userId = currentUser?.id;
+  useEffect(() => {
+    if (!userId) return;
+    clearClinicData();
+    loadClinicMeta();
     refreshAllData();
-  }, []);
+  }, [userId, loadClinicMeta, refreshAllData, clearClinicData]);
+
+  // Live updates: re-read data every few seconds and whenever the tab becomes visible again,
+  // so new patients / bookings made at the other desk show up without pressing refresh.
+  useEffect(() => {
+    if (!userId) return;
+    const tick = () => {
+      if (document.visibilityState === "visible") refreshAllData(true);
+    };
+    const timer = window.setInterval(tick, AUTO_REFRESH_MS);
+    document.addEventListener("visibilitychange", tick);
+    window.addEventListener("focus", tick);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", tick);
+      window.removeEventListener("focus", tick);
+    };
+  }, [userId, refreshAllData]);
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth", { method: "DELETE" });
+    } catch {
+      /* cookie is cleared server-side when reachable; the screen locks regardless */
+    }
+    clearClinicData();
+    setCurrentUser(null);
+    setShowLoginModal(false);
+  };
 
   // Guard Receptionist from accessing Reports, Settings, or Doctor's Consultation Workspace
   useEffect(() => {
@@ -183,17 +233,35 @@ export default function AppHome() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "CONVERT_TO_OPD", appointmentId })
       });
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
       if (res.ok) {
         await refreshAllData();
+        setOpdAppointmentsTab("opd");
         setActiveModule("opd");
       } else {
         alert(json.error || "Failed to convert appointment to OPD visit");
       }
     } catch (e) {
       console.error(e);
+      alert("Could not reach the server. Please check your internet connection and try again.");
     }
   };
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-[#F7F9FA] flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-[#258B7C] border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-[#F7F9FA]">
+        <LoginModal onLoggedIn={(u) => setCurrentUser(u)} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-[#F7F9FA] text-[#1A202C]">
@@ -206,7 +274,7 @@ export default function AppHome() {
         }}
         currentUser={currentUser}
         onSwitchUserClick={() => setShowLoginModal(true)}
-        onLogout={() => setShowLoginModal(true)}
+        onLogout={handleLogout}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
@@ -249,6 +317,11 @@ export default function AppHome() {
             <span className="text-xs font-medium text-slate-600 hidden md:inline truncate max-w-[180px]">
               • {currentUser?.fullName}
             </span>
+            {lastSynced && (
+              <span className="text-[10px] text-slate-400 hidden lg:inline" title="Data refreshes automatically">
+                ● Live
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -270,7 +343,7 @@ export default function AppHome() {
             visit={activeConsultationVisit}
             onBack={() => setActiveConsultationVisit(null)}
             onRefresh={() => {
-              refreshAllData();
+              refreshAllData(true);
               setActiveConsultationVisit(null);
             }}
             onPrintPrescription={(p) => setPrescriptionPrintData(p)}
@@ -298,7 +371,7 @@ export default function AppHome() {
             {activeModule === "patients" && (
               <PatientsView
                 patients={patients}
-                onRefresh={refreshAllData}
+                onRefresh={() => refreshAllData(true)}
                 currentUserRole={currentUser?.role}
                 onOpenConsultation={(v) => {
                   if (currentUser?.role === "DOCTOR") setActiveConsultationVisit(v);
@@ -327,8 +400,8 @@ export default function AppHome() {
                 visits={visits}
                 appointments={appointments}
                 patients={patients}
-                doctors={doctors}
-                onRefresh={refreshAllData}
+                doctors={visibleDoctors}
+                onRefresh={() => refreshAllData(true)}
                 onOpenConsultation={(v) => {
                   if (currentUser?.role === "DOCTOR") setActiveConsultationVisit(v);
                 }}
@@ -336,6 +409,8 @@ export default function AppHome() {
                   setActiveModule("patients");
                 }}
                 onConvertAppointment={handleConvertAppointmentToOpd}
+                onAppointmentBooked={(slip) => setAppointmentSlip(slip)}
+                clinicSetting={clinicSetting}
                 currentUserRole={currentUser?.role}
                 initialTab={opdAppointmentsTab}
                 initialPatient={preselectedPatientForAppt}
@@ -352,8 +427,8 @@ export default function AppHome() {
               <BillingView
                 bills={bills}
                 patients={patients}
-                doctors={doctors}
-                onRefresh={refreshAllData}
+                doctors={visibleDoctors}
+                onRefresh={() => refreshAllData(true)}
                 onPrintReceipt={(r) => setReceiptPrintData(r)}
                 onOpenPatientProfile={(pId) => {
                   setActiveModule("patients");
@@ -369,18 +444,24 @@ export default function AppHome() {
         )}
       </main>
 
-      {/* MODAL: SWITCH STAFF ACCOUNT / LOGIN */}
+      {/* MODAL: SWITCH STAFF ACCOUNT (password required) */}
       {showLoginModal && (
         <LoginModal
-          users={allUsers}
           currentUser={currentUser}
-          onSelectUser={(u) => {
+          onLoggedIn={(u) => {
             setCurrentUser(u);
-            if (typeof window !== "undefined") {
-              localStorage.setItem("matoshree_current_user", JSON.stringify(u));
-            }
+            setShowLoginModal(false);
           }}
           onClose={() => setShowLoginModal(false)}
+        />
+      )}
+
+      {/* MODAL: APPOINTMENT SLIP (token + print + Marathi WhatsApp) */}
+      {appointmentSlip && (
+        <PrintableAppointmentSlipModal
+          clinicInfo={clinicSetting}
+          slip={appointmentSlip}
+          onClose={() => setAppointmentSlip(null)}
         />
       )}
 

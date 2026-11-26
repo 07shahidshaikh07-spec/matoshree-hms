@@ -32,11 +32,14 @@
   #printable-prescription-content,
   #printable-prescription-content *,
   #printable-receipt-content,
-  #printable-receipt-content * {
+  #printable-receipt-content *,
+  #printable-appointment-slip,
+  #printable-appointment-slip * {
     visibility: visible;
   }
   #printable-prescription-content,
-  #printable-receipt-content {
+  #printable-receipt-content,
+  #printable-appointment-slip {
     position: absolute;
     left: 0;
     top: 0;

@@ -11,6 +11,15 @@
 
 import { prisma } from "@/lib/db";
 import { assertPermission, StaffRoleType } from "@/lib/rbac";
+import type { AuthUser } from "@/lib/session";
+import { istDayRange } from "@/lib/timezone";
+import {
+  appointmentWhereFor,
+  billWhereFor,
+  patientWhereFor,
+  scopedDoctorId,
+  visitWhereFor
+} from "@/lib/access";
 
 /**
  * Generates sequential unique Patient ID (e.g. MC-2026-0001).
@@ -69,6 +78,45 @@ export async function generateNextOpdVisitNumber(year = new Date().getFullYear()
   if (!latest) return `${prefix}0001`;
   const lastSeq = parseInt(latest.visitNumber.replace(prefix, ""), 10) || 0;
   return `${prefix}${String(lastSeq + 1).padStart(4, "0")}`;
+}
+
+/**
+ * Generates next sequential Appointment number (e.g. APT-2026-0001).
+ * Based on the highest existing number (not a row count) so it never repeats after deletions.
+ */
+export async function generateNextAppointmentNumber(year = new Date().getFullYear()): Promise<string> {
+  const prefix = `APT-${year}-`;
+  const latest = await prisma.appointment.findFirst({
+    where: { appointmentNumber: { startsWith: prefix } },
+    orderBy: { appointmentNumber: "desc" }
+  });
+  if (!latest) return `${prefix}0001`;
+  const lastSeq = parseInt(latest.appointmentNumber.replace(prefix, ""), 10) || 0;
+  return `${prefix}${String(lastSeq + 1).padStart(4, "0")}`;
+}
+
+/**
+ * Next token for a doctor on an IST calendar day (1, 2, 3 ...), counting every appointment
+ * that day (including cancelled ones) so a token is never handed out twice.
+ */
+export async function nextAppointmentToken(doctorId: string, dateStr: string): Promise<number> {
+  const { start, end } = istDayRange(dateStr);
+  const agg = await prisma.appointment.aggregate({
+    where: { doctorId, appointmentDate: { gte: start, lt: end } },
+    _max: { tokenNumber: true },
+    _count: { _all: true }
+  });
+  return Math.max(agg._max.tokenNumber ?? 0, agg._count._all) + 1;
+}
+
+/** Next OPD queue token for a doctor today (highest existing + 1). */
+export async function nextOpdToken(doctorId: string, tx: Pick<typeof prisma, "oPDVisit"> = prisma): Promise<number> {
+  const { start, end } = istDayRange();
+  const agg = await tx.oPDVisit.aggregate({
+    where: { doctorId, visitDate: { gte: start, lt: end } },
+    _max: { tokenNumber: true }
+  });
+  return (agg._max.tokenNumber ?? 0) + 1;
 }
 
 /**
@@ -202,35 +250,30 @@ export async function recordBillPayment(params: {
 /**
  * Converts a scheduled appointment into an OPD visit and updates appointment status.
  */
-export async function convertAppointmentToOpdVisit(appointmentId: string, actorUserId?: string, actorRole: StaffRoleType = "RECEPTIONIST") {
-  assertPermission(actorRole, "OPD_VISIT_CREATE");
+export async function convertAppointmentToOpdVisit(appointmentId: string, user: AuthUser) {
+  assertPermission(user.role, "OPD_VISIT_CREATE");
+  const ownDoctorId = scopedDoctorId(user);
 
   return prisma.$transaction(async (tx) => {
     const appt = await tx.appointment.findUnique({
       where: { id: appointmentId },
-      include: { doctor: true, patient: true }
+      include: { doctor: true, patient: true, opdVisit: { select: { visitNumber: true } } }
     });
-    if (!appt) throw new Error("Appointment not found.");
+    if (!appt || (ownDoctorId && appt.doctorId !== ownDoctorId)) {
+      throw Object.assign(new Error("Appointment not found."), { statusCode: 404 });
+    }
 
+    if (appt.opdVisit) {
+      throw new Error(`This appointment was already converted to OPD visit ${appt.opdVisit.visitNumber}.`);
+    }
     if (appt.status === "COMPLETED") {
       throw new Error("This appointment has already been completed.");
     }
-    if (appt.status === "CANCELLED") {
-      throw new Error("Cannot convert a cancelled appointment to an OPD visit.");
+    if (appt.status === "CANCELLED" || appt.status === "NO_SHOW") {
+      throw new Error("Cannot convert a cancelled / no-show appointment to an OPD visit.");
     }
 
-    // Determine today's token for this doctor
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
-
-    const tokenCount = await tx.oPDVisit.count({
-      where: {
-        doctorId: appt.doctorId,
-        visitDate: { gte: startOfToday, lte: endOfToday }
-      }
-    });
+    const nextToken = await nextOpdToken(appt.doctorId, tx);
 
     const visitNumber = await generateNextOpdVisitNumber();
     const nowTimeStr = new Intl.DateTimeFormat("en-IN", {
@@ -247,7 +290,7 @@ export async function convertAppointmentToOpdVisit(appointmentId: string, actorU
         doctorId: appt.doctorId,
         visitDate: new Date(),
         visitTime: nowTimeStr,
-        tokenNumber: tokenCount + 1,
+        tokenNumber: nextToken,
         reasonForVisit: appt.reasonForVisit ?? "Appointment Consultation",
         status: "WAITING",
         appointmentId: appt.id
@@ -264,76 +307,76 @@ export async function convertAppointmentToOpdVisit(appointmentId: string, actorU
 }
 
 /**
- * Fetches actual aggregated dashboard figures directly from SQLite database.
+ * Aggregated dashboard figures for the signed-in user. Doctors only ever receive their own
+ * patients, visits, appointments and bills; front desk receives the whole clinic.
+ * "Today" is always the IST calendar day.
  */
-export async function getDashboardData() {
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const endOfToday = new Date();
-  endOfToday.setHours(23, 59, 59, 999);
+export async function getDashboardData(user: AuthUser) {
+  const { start: startOfToday, end: endOfToday } = istDayRange();
+  const visitScope = visitWhereFor(user);
+  const apptScope = appointmentWhereFor(user);
+  const billScope = billWhereFor(user);
+  const patientScope = patientWhereFor(user);
 
-  // 1. Today's OPD Visits
-  const todayVisits = await prisma.oPDVisit.findMany({
-    where: { visitDate: { gte: startOfToday, lte: endOfToday } },
-    include: {
-      patient: true,
-      doctor: true,
-      consultation: { select: { id: true, status: true, signedAt: true } },
-      bill: { select: { id: true, billNumber: true, totalAmount: true, paidAmount: true, balanceDue: true, paymentStatus: true } }
-    },
-    orderBy: { tokenNumber: "asc" }
-  });
-
-  // 2. Today's Appointments
-  const todayAppointments = await prisma.appointment.findMany({
-    where: { appointmentDate: { gte: startOfToday, lte: endOfToday } },
-    include: {
-      patient: true,
-      doctor: true
-    },
-    orderBy: { slotTime: "asc" }
-  });
-
-  // 3. Upcoming Appointments (from today onwards)
-  const upcomingAppointments = await prisma.appointment.findMany({
-    where: {
-      appointmentDate: { gte: startOfToday },
-      status: { in: ["SCHEDULED", "CONFIRMED"] }
-    },
-    include: {
-      patient: true,
-      doctor: true
-    },
-    orderBy: [{ appointmentDate: "asc" }, { slotTime: "asc" }],
-    take: 10
-  });
-
-  // 4. Financials: Payments received today
-  const todayPayments = await prisma.payment.findMany({
-    where: { receivedAt: { gte: startOfToday, lte: endOfToday } }
-  });
+  const [todayVisits, todayAppointments, upcomingAppointments, todayPayments, pendingBills, newPatientsToday] =
+    await Promise.all([
+      prisma.oPDVisit.findMany({
+        where: { ...visitScope, visitDate: { gte: startOfToday, lt: endOfToday } },
+        include: {
+          patient: true,
+          doctor: true,
+          consultation: { select: { id: true, status: true, signedAt: true } },
+          bill: { select: { id: true, billNumber: true, totalAmount: true, paidAmount: true, balanceDue: true, paymentStatus: true } }
+        },
+        orderBy: { tokenNumber: "asc" }
+      }),
+      prisma.appointment.findMany({
+        where: { ...apptScope, appointmentDate: { gte: startOfToday, lt: endOfToday } },
+        include: { patient: true, doctor: true, opdVisit: { select: { id: true, visitNumber: true, status: true } } },
+        orderBy: [{ tokenNumber: "asc" }, { createdAt: "asc" }]
+      }),
+      prisma.appointment.findMany({
+        where: {
+          ...apptScope,
+          appointmentDate: { gte: startOfToday },
+          status: { in: ["SCHEDULED", "CONFIRMED"] }
+        },
+        include: { patient: true, doctor: true },
+        orderBy: [{ appointmentDate: "asc" }, { slotTime: "asc" }],
+        take: 10
+      }),
+      prisma.payment.findMany({
+        where: { receivedAt: { gte: startOfToday, lt: endOfToday }, bill: billScope }
+      }),
+      prisma.bill.findMany({
+        where: { ...billScope, balanceDue: { gt: 0 } },
+        select: { balanceDue: true }
+      }),
+      prisma.patient.findMany({
+        where: { AND: [{ createdAt: { gte: startOfToday, lt: endOfToday } }, ...(patientScope ? [patientScope] : [])] },
+        select: { id: true, patientId: true, fullName: true, age: true, gender: true, mobileNumber: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: 20
+      })
+    ]);
 
   const totalCollectedToday = todayPayments.reduce((acc, p) => acc + p.amount, 0);
   const cashCollection = todayPayments.filter((p) => p.paymentMethod === "CASH").reduce((acc, p) => acc + p.amount, 0);
   const upiCollection = todayPayments.filter((p) => p.paymentMethod === "UPI").reduce((acc, p) => acc + p.amount, 0);
   const otherCollection = todayPayments.filter((p) => p.paymentMethod === "OTHER").reduce((acc, p) => acc + p.amount, 0);
-
-  // All pending payments across clinic
-  const pendingBills = await prisma.bill.findMany({
-    where: { balanceDue: { gt: 0 } },
-    select: { balanceDue: true }
-  });
   const totalPendingAmount = pendingBills.reduce((acc, b) => acc + b.balanceDue, 0);
 
-  // Total unique patients today
+  // Unique patients today: seen in OPD, booked for today, or newly registered today
   const patientIdsToday = new Set<string>();
   todayVisits.forEach((v) => patientIdsToday.add(v.patientId));
   todayAppointments.forEach((a) => patientIdsToday.add(a.patientId));
+  newPatientsToday.forEach((p) => patientIdsToday.add(p.id));
 
   return {
     summaryCards: {
       todayPatientsCount: patientIdsToday.size,
       todayAppointmentsCount: todayAppointments.length,
+      newPatientsCount: newPatientsToday.length,
       pendingPaymentsAmount: totalPendingAmount,
       todayCollectionTotal: totalCollectedToday,
       cashCollection,
@@ -341,6 +384,8 @@ export async function getDashboardData() {
       otherCollection
     },
     todayVisits,
-    upcomingAppointments
+    todayAppointments,
+    upcomingAppointments,
+    newPatientsToday
   };
 }

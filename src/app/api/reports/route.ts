@@ -1,46 +1,59 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { assertPermission, StaffRoleType } from "@/lib/rbac";
+import { assertPermission } from "@/lib/rbac";
+import { requireUser } from "@/lib/session";
+import { apiError } from "@/lib/apiHelpers";
+import { billWhereFor, consultationWhereFor, scopedDoctorId, visitWhereFor } from "@/lib/access";
+import { istDateString } from "@/lib/timezone";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(req: NextRequest) {
   try {
-    const role = (req.headers.get("x-user-role") || "RECEPTIONIST") as StaffRoleType;
-    assertPermission(role, "REPORTS_VIEW");
+    const user = await requireUser(req);
+    assertPermission(user.role, "REPORTS_VIEW");
+    const ownDoctorId = scopedDoctorId(user);
+    const billScope = billWhereFor(user);
 
     // Fetch visits, consultations, bills, payments
     const [visits, consultations, bills, payments, doctors] = await Promise.all([
       prisma.oPDVisit.findMany({
+        where: visitWhereFor(user),
         include: { doctor: true, patient: true },
         orderBy: { visitDate: "desc" }
       }),
       prisma.consultation.findMany({
+        where: consultationWhereFor(user),
         include: { doctor: true, patient: true },
         orderBy: { consultationDate: "desc" }
       }),
       prisma.bill.findMany({
+        where: billScope,
         include: { patient: true, doctor: true },
         orderBy: { createdAt: "desc" }
       }),
       prisma.payment.findMany({
+        where: { bill: billScope },
         include: {
           bill: { include: { patient: true, doctor: true } }
         },
         orderBy: { receivedAt: "desc" }
       }),
-      prisma.doctorProfile.findMany()
+      prisma.doctorProfile.findMany(ownDoctorId ? { where: { id: ownDoctorId } } : undefined)
     ]);
 
     // 1. Daily patient visits (grouped by YYYY-MM-DD)
     const dailyVisitsMap: Record<string, number> = {};
     visits.forEach((v) => {
-      const d = v.visitDate.toISOString().split("T")[0];
+      const d = istDateString(v.visitDate);
       dailyVisitsMap[d] = (dailyVisitsMap[d] || 0) + 1;
     });
 
     // 2. Monthly patient visits (grouped by YYYY-MM)
     const monthlyVisitsMap: Record<string, number> = {};
     visits.forEach((v) => {
-      const m = v.visitDate.toISOString().substring(0, 7);
+      const m = istDateString(v.visitDate).substring(0, 7);
       monthlyVisitsMap[m] = (monthlyVisitsMap[m] || 0) + 1;
     });
 
@@ -58,7 +71,7 @@ export async function GET(req: NextRequest) {
     // 4. Daily collections
     const dailyCollectionsMap: Record<string, { total: number; cash: number; upi: number; other: number }> = {};
     payments.forEach((p) => {
-      const d = p.receivedAt.toISOString().split("T")[0];
+      const d = istDateString(p.receivedAt);
       if (!dailyCollectionsMap[d]) {
         dailyCollectionsMap[d] = { total: 0, cash: 0, upi: 0, other: 0 };
       }
@@ -71,7 +84,7 @@ export async function GET(req: NextRequest) {
     // 5. Monthly collections
     const monthlyCollectionsMap: Record<string, number> = {};
     payments.forEach((p) => {
-      const m = p.receivedAt.toISOString().substring(0, 7);
+      const m = istDateString(p.receivedAt).substring(0, 7);
       monthlyCollectionsMap[m] = (monthlyCollectionsMap[m] || 0) + p.amount;
     });
 
@@ -102,6 +115,6 @@ export async function GET(req: NextRequest) {
       }
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: err.statusCode || 500 });
+    return apiError(err, 500);
   }
 }

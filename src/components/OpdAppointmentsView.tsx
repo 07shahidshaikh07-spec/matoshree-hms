@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { formatISTDate } from "@/lib/timezone";
+import { formatISTDate, istDateString } from "@/lib/timezone";
 import { PatientSelector } from "./PatientSelector";
+import type { AppointmentSlipData } from "./AppointmentSlip";
 import {
   Stethoscope,
   Calendar as CalendarIcon,
@@ -19,7 +20,8 @@ import {
   QrCode,
   ExternalLink,
   Copy,
-  Check
+  Check,
+  Printer
 } from "lucide-react";
 
 interface OpdAppointmentsViewProps {
@@ -31,6 +33,8 @@ interface OpdAppointmentsViewProps {
   onOpenConsultation: (visit: any) => void;
   onOpenPatientProfile: (patientId: string) => void;
   onConvertAppointment: (appointmentId: string) => void;
+  onAppointmentBooked?: (slip: AppointmentSlipData) => void;
+  clinicSetting?: any;
   currentUserRole?: string;
   initialTab?: "opd" | "appointments";
   initialPatient?: any | null;
@@ -49,6 +53,7 @@ export function OpdAppointmentsView({
   onOpenConsultation,
   onOpenPatientProfile,
   onConvertAppointment,
+  onAppointmentBooked,
   currentUserRole = "DOCTOR",
   initialTab = "opd",
   initialPatient = null,
@@ -78,7 +83,7 @@ export function OpdAppointmentsView({
   const [reasonForVisit, setReasonForVisit] = useState("");
 
   // Appointment-Specific Fields
-  const [apptDate, setApptDate] = useState(new Date().toISOString().split("T")[0]);
+  const [apptDate, setApptDate] = useState(istDateString());
   const [apptSlotTime, setApptSlotTime] = useState("10:00 AM");
 
   const [submitting, setSubmitting] = useState(false);
@@ -132,7 +137,7 @@ export function OpdAppointmentsView({
 
   // Keep default doctor updated if doctors list loads asynchronously
   useEffect(() => {
-    if (doctors.length > 0 && !selectedDoctorId) {
+    if (doctors.length > 0 && !doctors.some((d) => d.id === selectedDoctorId)) {
       setSelectedDoctorId(doctors[0].id);
     }
   }, [doctors, selectedDoctorId]);
@@ -153,7 +158,7 @@ export function OpdAppointmentsView({
       try {
         const d = a.appointmentDate ? new Date(a.appointmentDate) : null;
         if (!d || isNaN(d.getTime())) return false;
-        const aDate = d.toISOString().split("T")[0];
+        const aDate = istDateString(d);
         if (aDate !== apptDateFilter) return false;
       } catch {
         return false;
@@ -234,6 +239,8 @@ export function OpdAppointmentsView({
         handleCloseModal();
         setActiveTab("appointments");
         onRefresh();
+        // Show the printable slip (token number + Marathi WhatsApp share) straight away
+        if (json.data && onAppointmentBooked) onAppointmentBooked(buildSlip(json.data, apptDate));
       }
     } catch (err: any) {
       setModalError(err.message);
@@ -241,6 +248,27 @@ export function OpdAppointmentsView({
       setSubmitting(false);
     }
   };
+
+  const buildSlip = (a: any, dateStr?: string): AppointmentSlipData => ({
+    appointmentNumber: a.appointmentNumber,
+    tokenNumber: a.tokenNumber ?? null,
+    dateStr: dateStr || istDateString(a.appointmentDate),
+    slotTime: a.slotTime,
+    reasonForVisit: a.reasonForVisit,
+    patient: {
+      patientId: a.patient.patientId,
+      fullName: a.patient.fullName,
+      age: a.patient.age,
+      gender: a.patient.gender,
+      mobileNumber: a.patient.mobileNumber
+    },
+    doctor: {
+      doctorName: a.doctor.doctorName,
+      specialty: a.doctor.specialty,
+      qualification: a.doctor.qualification,
+      roomNumber: a.doctor.roomNumber
+    }
+  });
 
   const handleUpdateVisitStatus = async (id: string, status: string) => {
     try {
@@ -669,6 +697,7 @@ export function OpdAppointmentsView({
                 <table className="w-full text-left text-xs">
                   <thead className="bg-[#F7F9FA] text-slate-600 font-semibold border-b border-slate-200">
                     <tr>
+                      <th className="py-3.5 px-4">Token</th>
                       <th className="py-3.5 px-4">Apt #</th>
                       <th className="py-3.5 px-4">Patient</th>
                       <th className="py-3.5 px-4">Doctor</th>
@@ -685,6 +714,17 @@ export function OpdAppointmentsView({
 
                       return (
                         <tr key={a.id} className="hover:bg-slate-50/60 transition">
+                          {/* Appointment Token */}
+                          <td className="py-3.5 px-4">
+                            {a.tokenNumber ? (
+                              <span className="w-7 h-7 rounded-lg bg-[#E6F7F4] text-[#258B7C] font-bold flex items-center justify-center text-xs">
+                                {a.tokenNumber}
+                              </span>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
+                          </td>
+
                           {/* Appointment Number */}
                           <td className="py-3.5 px-4 font-mono font-semibold text-slate-600">
                             <div>{a.appointmentNumber}</div>
@@ -750,7 +790,18 @@ export function OpdAppointmentsView({
                           {/* Actions */}
                           <td className="py-3.5 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
-                              {isConvertible && (
+                              {onAppointmentBooked && (
+                                <button
+                                  onClick={() => onAppointmentBooked(buildSlip(a))}
+                                  type="button"
+                                  title="Print appointment slip / share on WhatsApp"
+                                  className="flex items-center gap-1 px-2 py-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold transition"
+                                >
+                                  <Printer className="w-3 h-3" />
+                                  <span>Slip</span>
+                                </button>
+                              )}
+                              {isConvertible && !a.opdVisit && (
                                 <button
                                   onClick={() => onConvertAppointment(a.id)}
                                   type="button"
